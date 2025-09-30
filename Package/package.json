@@ -3,13 +3,7 @@
   "version": "1.0.0",
   "description": "A comprehensive Java Abstract Syntax Tree (AST) parser and generator for Node.js",
   "main": "index.js",
-  "scripts": {
-    "test": "node src/testingjava.js",
-    "example": "node examples/simple-usage.js",
-    "example-basic": "node examples/basic-usage.js",
-    "lint": "eslint src/**/*.js",
-    "start": "node examples/simple-usage.js"
-  },
+  
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gagan987123/AST_JAVA.git"
@@ -26,7 +20,7 @@
     "source-code",
     "compiler"
   ],
-  "author": "GAGANDEEP SINGH <your.email@example.com>",
+  "author": "GAGANDEEP SINGH <gaganarora987123@gmail.com>",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/gagan987123/AST_JAVA/issues"
@@ -38,7 +32,6 @@
   "files": [
     "index.js",
     "src/",
-    "examples/",
     "README.md",
     "LICENSE"
   ]
