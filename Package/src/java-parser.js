@@ -101,6 +101,18 @@ class InterfaceDeclaration extends JavaASTNode {
   }
 }
 
+class EnumDeclaration extends JavaASTNode {
+  constructor(name, modifiers, interfaces, constants, body, annotations, line, column) {
+    super('EnumDeclaration', line, column);
+    this.name = name;
+    this.modifiers = modifiers;
+    this.interfaces = interfaces || [];
+    this.constants = constants || [];
+    this.body = body;
+    this.annotations = annotations || [];
+  }
+}
+
 // Type AST Nodes
 class Type extends JavaASTNode {
   constructor(name, isArray = false, arrayDimensions = 0, line, column) {
@@ -326,8 +338,10 @@ class JavaParser {
       return this.classDeclaration(modifiers, annotations);
     } else if (this.match(JavaTokenType.INTERFACE)) {
       return this.interfaceDeclaration(modifiers, annotations);
+    } else if (this.match(JavaTokenType.ENUM)) {
+      return this.enumDeclaration(modifiers, annotations);
     } else {
-      this.error('Expected class or interface declaration');
+      this.error('Expected class, interface, or enum declaration');
     }
   }
 
@@ -404,10 +418,16 @@ class JavaParser {
                                classToken.line, classToken.column);
   }
 
-  // interfaceDeclaration: 'interface' IDENTIFIER ('extends' typeList)? interfaceBody
+  // interfaceDeclaration: 'interface' IDENTIFIER ('<' typeParameters '>')? ('extends' typeList)? interfaceBody
   interfaceDeclaration(modifiers = [], annotations = []) {
     const interfaceToken = this.consume(JavaTokenType.INTERFACE);
     const name = this.consume(JavaTokenType.IDENTIFIER, 'Expected interface name').value;
+    
+    // Parse generic type parameters if present
+    let typeParameters = [];
+    if (this.match(JavaTokenType.LESS_THAN)) {
+      typeParameters = this.parseTypeParameters();
+    }
     
     const interfaces = [];
     if (this.match(JavaTokenType.EXTENDS)) {
@@ -422,8 +442,124 @@ class JavaParser {
     
     const body = this.classBody(); // Interface body is similar to class body
     
-    return new InterfaceDeclaration(name, modifiers, interfaces, body, annotations,
+    const interfaceDecl = new InterfaceDeclaration(name, modifiers, interfaces, body, annotations,
                                    interfaceToken.line, interfaceToken.column);
+    interfaceDecl.typeParameters = typeParameters;
+    return interfaceDecl;
+  }
+
+  // enumDeclaration: 'enum' IDENTIFIER ('implements' typeList)? enumBody
+  enumDeclaration(modifiers = [], annotations = []) {
+    const enumToken = this.consume(JavaTokenType.ENUM);
+    const name = this.consume(JavaTokenType.IDENTIFIER, 'Expected enum name').value;
+    
+    const interfaces = [];
+    if (this.match(JavaTokenType.IMPLEMENTS)) {
+      this.advance();
+      interfaces.push(this.parseType());
+      
+      while (this.match(JavaTokenType.COMMA)) {
+        this.advance();
+        interfaces.push(this.parseType());
+      }
+    }
+    
+    // Parse enum body
+    this.consume(JavaTokenType.LBRACE, 'Expected "{"');
+    
+    const constants = [];
+    const bodyStatements = [];
+    
+    // Parse enum constants
+    while (!this.match(JavaTokenType.RBRACE) && !this.match(JavaTokenType.EOF)) {
+      if (this.match(JavaTokenType.IDENTIFIER)) {
+        const constantName = this.currentToken.value;
+        const startLine = this.currentToken.line;
+        const startColumn = this.currentToken.column;
+        this.advance();
+        
+        // Check for constructor parameters
+        let parameters = [];
+        if (this.match(JavaTokenType.LPAREN)) {
+          this.advance(); // consume '('
+          
+          // Parse parameters (simplified - collect tokens until ')')
+          const paramTokens = [];
+          let parenCount = 1;
+          while (parenCount > 0 && !this.match(JavaTokenType.EOF)) {
+            if (this.match(JavaTokenType.LPAREN)) parenCount++;
+            if (this.match(JavaTokenType.RPAREN)) parenCount--;
+            
+            if (parenCount > 0) {
+              paramTokens.push(this.currentToken);
+            }
+            this.advance();
+          }
+          
+          if (paramTokens.length > 0) {
+            parameters = paramTokens;
+          }
+        }
+        
+        constants.push({
+          type: 'EnumConstant',
+          name: constantName,
+          parameters: parameters,
+          line: startLine,
+          column: startColumn
+        });
+        
+        if (this.match(JavaTokenType.COMMA)) {
+          this.advance();
+        } else if (this.match(JavaTokenType.SEMICOLON)) {
+          this.advance();
+          break; // End of constants, start of methods/fields
+        }
+      } else {
+        break;
+      }
+    }
+    
+    // Parse methods and fields (simplified)
+    while (!this.match(JavaTokenType.RBRACE) && !this.match(JavaTokenType.EOF)) {
+      const member = this.classMember();
+      if (member) {
+        bodyStatements.push(member);
+      }
+    }
+    
+    this.consume(JavaTokenType.RBRACE, 'Expected "}"');
+    
+    const body = new Block(bodyStatements);
+    
+    return new EnumDeclaration(name, modifiers, interfaces, constants, body, annotations,
+                              enumToken.line, enumToken.column);
+  }
+
+  // Parse generic type parameters: '<' typeParameter (',' typeParameter)* '>'
+  parseTypeParameters() {
+    this.consume(JavaTokenType.LESS_THAN, 'Expected "<"');
+    
+    const typeParameters = [];
+    
+    // Parse first type parameter
+    if (this.match(JavaTokenType.IDENTIFIER)) {
+      typeParameters.push(this.currentToken.value);
+      this.advance();
+    }
+    
+    // Parse additional type parameters
+    while (this.match(JavaTokenType.COMMA)) {
+      this.advance();
+      if (this.match(JavaTokenType.IDENTIFIER)) {
+        typeParameters.push(this.currentToken.value);
+        this.advance();
+      }
+    }
+    
+    this.consume(JavaTokenType.GREATER_THAN, 'Expected ">"');
+    
+    return typeParameters;
   }
 
   // classBody: '{' classMember* '}'
@@ -452,12 +588,30 @@ class JavaParser {
     const annotations = this.parseAnnotations();
     const modifiers = this.parseModifiers();
     
-    // Check if we have a method or constructor
-    if (this.match(JavaTokenType.VOID, JavaTokenType.INT, JavaTokenType.DOUBLE,
-                  JavaTokenType.BOOLEAN_TYPE, JavaTokenType.FLOAT, JavaTokenType.LONG,
-                  JavaTokenType.SHORT, JavaTokenType.BYTE, JavaTokenType.CHAR_TYPE)) {
-      // This is definitely a method (has return type)
+    // Check if we have a method, constructor, or field
+    if (this.match(JavaTokenType.VOID)) {
+      // void can only be a method return type
       return this.methodDeclaration(modifiers, annotations);
+    } else if (this.match(JavaTokenType.INT, JavaTokenType.DOUBLE,
+                         JavaTokenType.BOOLEAN_TYPE, JavaTokenType.FLOAT, JavaTokenType.LONG,
+                         JavaTokenType.SHORT, JavaTokenType.BYTE, JavaTokenType.CHAR_TYPE)) {
+      // Primitive type - could be method or field
+      const typeToken = this.currentToken;
+      const nextToken = this.peek();
+      
+      if (nextToken.type === JavaTokenType.IDENTIFIER) {
+        const nameToken = this.peek(2);
+        if (nameToken && nameToken.type === JavaTokenType.LPAREN) {
+          // primitive type + identifier + ( = method
+          return this.methodDeclaration(modifiers, annotations);
+        } else {
+          // primitive type + identifier + something else = field
+          return this.fieldDeclaration(modifiers, annotations);
+        }
+      } else {
+        // Just primitive type - assume method for now
+        return this.methodDeclaration(modifiers, annotations);
+      }
     }
     
     if (this.match(JavaTokenType.IDENTIFIER)) {
@@ -465,21 +619,20 @@ class JavaParser {
       const name = this.currentToken.value;
       const nextToken = this.peek();
       
-      if (nextToken.type === JavaTokenType.LPAREN) {
+      if (nextToken && nextToken.type === JavaTokenType.LPAREN) {
         // identifier followed by ( - this is a constructor
         return this.constructorDeclaration(modifiers, annotations);
-      } else if (nextToken.type === JavaTokenType.IDENTIFIER) {
+      } else if (nextToken && nextToken.type === JavaTokenType.IDENTIFIER) {
         // Check if this is actually a method by looking ahead for (
         const secondNext = this.peek(2);
         if (secondNext && secondNext.type === JavaTokenType.LPAREN) {
           // identifier followed by identifier followed by ( - this is a method with object return type
           return this.methodDeclaration(modifiers, annotations);
         } else {
-          // This is likely a field declaration - skip it
-          this.skipToNextMember();
-          return null;
+          // This is likely a field declaration
+          return this.fieldDeclaration(modifiers, annotations);
         }
-      } else if (nextToken.type === JavaTokenType.LBRACKET) {
+      } else if (nextToken && nextToken.type === JavaTokenType.LBRACKET) {
         // identifier followed by [ - this is a method with array return type
         return this.methodDeclaration(modifiers, annotations);
       } else {
@@ -705,6 +858,26 @@ class JavaParser {
       return this.returnStatement();
     }
     
+    // For statement
+    if (this.match(JavaTokenType.FOR)) {
+      return this.forStatement();
+    }
+    
+    // If statement
+    if (this.match(JavaTokenType.IF)) {
+      return this.ifStatement();
+    }
+    
+    // While statement
+    if (this.match(JavaTokenType.WHILE)) {
+      return this.whileStatement();
+    }
+    
+    // Try statement
+    if (this.match(JavaTokenType.TRY)) {
+      return this.tryStatement();
+    }
+    
     // Simple variable declaration or expression statement
     const result = this.variableDeclarationOrExpression();
     
@@ -740,19 +913,43 @@ class JavaParser {
   ifStatement() {
     const ifToken = this.consume(JavaTokenType.IF);
     this.consume(JavaTokenType.LPAREN, 'Expected "(" after if');
-    const condition = this.expression();
-    this.consume(JavaTokenType.RPAREN, 'Expected ")" after if condition');
-    const thenStatement = this.statement();
-    let elseStatement = null;
     
+    // Collect condition tokens
+    const conditionTokens = [];
+    while (!this.match(JavaTokenType.RPAREN) && !this.match(JavaTokenType.EOF)) {
+      conditionTokens.push(this.currentToken);
+      this.advance();
+    }
+    
+    this.consume(JavaTokenType.RPAREN, 'Expected ")" after if condition');
+    
+    // Check if the then statement is a block or a single statement
+    let thenStatement;
+    if (this.match(JavaTokenType.LBRACE)) {
+      thenStatement = this.block();
+    } else {
+      thenStatement = this.statement();
+    }
+    
+    let elseStatement = null;
     if (this.match(JavaTokenType.ELSE)) {
       this.advance();
-      elseStatement = this.statement();
+      // Check if the else statement is a block or a single statement
+      if (this.match(JavaTokenType.LBRACE)) {
+        elseStatement = this.block();
+      } else {
+        elseStatement = this.statement();
+      }
     }
     
     return {
       type: 'IfStatement',
-      condition: condition,
+      condition: {
+        type: 'Expression',
+        tokens: conditionTokens,
+        line: ifToken.line,
+        column: ifToken.column
+      },
       thenStatement: thenStatement,
       elseStatement: elseStatement,
       line: ifToken.line,
@@ -765,68 +962,146 @@ class JavaParser {
     const forToken = this.consume(JavaTokenType.FOR);
     this.consume(JavaTokenType.LPAREN, 'Expected "(" after for');
     
-    // Skip for loop contents for now
+    // Collect all tokens within the for loop parentheses
+    const tokens = [forToken, { type: 'LPAREN', value: '(', line: forToken.line, column: forToken.column }];
     let parenCount = 1;
+    
     while (parenCount > 0 && !this.match(JavaTokenType.EOF)) {
+      const token = this.currentToken;
+      tokens.push(token);
+      
       if (this.match(JavaTokenType.LPAREN)) parenCount++;
-      else if (this.match(JavaTokenType.RPAREN)) parenCount--;
+      if (this.match(JavaTokenType.RPAREN)) parenCount--;
       this.advance();
     }
     
-    const body = this.statement();
+    // Check if the body is a block or a single statement
+    let body;
+    if (this.match(JavaTokenType.LBRACE)) {
+      body = this.block();
+    } else {
+      body = this.statement();
+    }
     
     return {
       type: 'ForStatement',
       body: body,
+      tokens: tokens,
       line: forToken.line,
       column: forToken.column
     };
   }
-
   // Parse while statement
   whileStatement() {
     const whileToken = this.consume(JavaTokenType.WHILE);
     this.consume(JavaTokenType.LPAREN, 'Expected "(" after while');
-    const condition = this.expression();
+    
+    // Collect condition tokens
+    const conditionTokens = [];
+    while (!this.match(JavaTokenType.RPAREN) && !this.match(JavaTokenType.EOF)) {
+      conditionTokens.push(this.currentToken);
+      this.advance();
+    }
+    
     this.consume(JavaTokenType.RPAREN, 'Expected ")" after while condition');
-    const body = this.statement();
+    
+    // Check if the body is a block or a single statement
+    let body;
+    if (this.match(JavaTokenType.LBRACE)) {
+      body = this.block();
+    } else {
+      body = this.statement();
+    }
     
     return {
       type: 'WhileStatement',
-      condition: condition,
+      condition: {
+        type: 'Expression',
+        tokens: conditionTokens,
+        line: whileToken.line,
+        column: whileToken.column
+      },
       body: body,
       line: whileToken.line,
       column: whileToken.column
     };
   }
 
-  // Parse try statement (simplified)
+  // Parse try statement
   tryStatement() {
     const tryToken = this.consume(JavaTokenType.TRY);
     const tryBlock = this.block();
     
-    // Skip catch and finally blocks for now
-    while (this.match(JavaTokenType.CATCH) || this.match(JavaTokenType.FINALLY)) {
-      this.advance();
-      if (this.match(JavaTokenType.LPAREN)) {
-        let parenCount = 1;
+    const catchBlocks = [];
+    let finallyBlock = null;
+    
+    // Parse catch blocks
+    while (this.match(JavaTokenType.CATCH)) {
+      const catchToken = this.consume(JavaTokenType.CATCH);
+      this.consume(JavaTokenType.LPAREN, 'Expected "(" after catch');
+      
+      // Collect exception parameter tokens
+      const parameterTokens = [];
+      while (!this.match(JavaTokenType.RPAREN) && !this.match(JavaTokenType.EOF)) {
+        parameterTokens.push(this.currentToken);
         this.advance();
-        while (parenCount > 0 && !this.match(JavaTokenType.EOF)) {
-          if (this.match(JavaTokenType.LPAREN)) parenCount++;
-          else if (this.match(JavaTokenType.RPAREN)) parenCount--;
-          this.advance();
-        }
       }
-      if (this.match(JavaTokenType.LBRACE)) {
-        this.block();
-      }
+      
+      this.consume(JavaTokenType.RPAREN, 'Expected ")" after catch parameter');
+      const catchBlockBody = this.block();
+      
+      catchBlocks.push({
+        type: 'CatchBlock',
+        parameter: {
+          type: 'Expression',
+          tokens: parameterTokens,
+          line: catchToken.line,
+          column: catchToken.column
+        },
+        body: catchBlockBody,
+        line: catchToken.line,
+        column: catchToken.column
+      });
+    }
+    
+    // Parse finally block
+    if (this.match(JavaTokenType.FINALLY)) {
+      this.advance();
+      finallyBlock = this.block();
     }
     
     return {
       type: 'TryStatement',
       tryBlock: tryBlock,
+      catchBlocks: catchBlocks,
+      finallyBlock: finallyBlock,
       line: tryToken.line,
       column: tryToken.column
+    };
+  }
+
+  // Parse field declaration
+  fieldDeclaration(modifiers = [], annotations = []) {
+    const fieldType = this.parseType();
+    const fieldName = this.consume(JavaTokenType.IDENTIFIER, 'Expected field name').value;
+    
+    let initializer = null;
+    if (this.match(JavaTokenType.ASSIGN)) {
+      this.advance();
+      initializer = this.expression();
+    }
+    
+    this.consume(JavaTokenType.SEMICOLON, 'Expected ";" after field declaration');
+    
+    return {
+      type: 'FieldDeclaration',
+      modifiers: modifiers,
+      annotations: annotations,
+      fieldType: fieldType,
+      name: fieldName,
+      initializer: initializer,
+      line: fieldType.line,
+      column: fieldType.column
     };
   }
 
@@ -834,19 +1109,6 @@ class JavaParser {
   variableDeclarationOrExpression() {
     const startLine = this.currentToken.line;
     const startColumn = this.currentToken.column;
-    
-    // Check if this looks like a variable declaration
-    if (this.isVariableDeclaration()) {
-      return this.variableDeclaration();
-    }
-    
-    // Skip if we're at a closing brace or semicolon
-    if (this.match(JavaTokenType.RBRACE) || this.match(JavaTokenType.SEMICOLON)) {
-      if (this.match(JavaTokenType.SEMICOLON)) {
-        this.advance();
-      }
-      return null;
-    }
     
     // Otherwise, parse as expression statement
     const expression = this.expression();

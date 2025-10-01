@@ -1,9 +1,12 @@
 {
   "name": "java-ast-parser",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "A comprehensive Java Abstract Syntax Tree (AST) parser and generator for Node.js",
   "main": "index.js",
-  
+  "scripts": {
+    "prepublishOnly": "echo 'Publishing java-ast-parser...'",
+    "postpublish": "echo 'Successfully published java-ast-parser!'"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gagan987123/AST_JAVA.git"

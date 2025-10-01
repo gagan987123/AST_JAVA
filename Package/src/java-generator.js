@@ -163,6 +163,11 @@ class JavaCodeGenerator {
     
     code += `interface ${ast.name}`;
     
+    // Generic type parameters
+    if (ast.typeParameters && ast.typeParameters.length > 0) {
+      code += `<${ast.typeParameters.join(', ')}>`;
+    }
+    
     // Extends clause
     if (ast.interfaces && ast.interfaces.length > 0) {
       code += ` extends ${ast.interfaces.map(i => this.generate(i)).join(', ')}`;
@@ -727,12 +732,26 @@ class JavaGenerator {
     switch (this.ast.type) {
       case 'CompilationUnit':
         return this.generateCompilationUnit(this.ast);
+      case 'PackageDeclaration':
+        return this.generatePackage(this.ast);
+      case 'ImportDeclaration':
+        return this.generateImport(this.ast);
       case 'ClassDeclaration':
         return this.generateClass(this.ast);
+      case 'InterfaceDeclaration':
+        return this.generateInterface(this.ast);
+      case 'EnumDeclaration':
+        return this.generateEnum(this.ast);
       case 'MethodDeclaration':
         return this.generateMethod(this.ast);
+      case 'ConstructorDeclaration':
+        return this.generateConstructor(this.ast);
       case 'VariableDeclaration':
         return this.generateVariableDeclaration(this.ast);
+      case 'FieldDeclaration':
+        return this.generateField(this.ast);
+      case 'Annotation':
+        return this.generateAnnotation(this.ast);
       case 'ExpressionStatement':
         return this.generateExpressionStatement(this.ast);
       case 'ReturnStatement':
@@ -761,14 +780,27 @@ class JavaGenerator {
       code += '\n';
     }
     
-    // Type declarations (classes)
+    // Type declarations (classes and interfaces)
     if (ast.typeDeclarations && ast.typeDeclarations.length > 0) {
       ast.typeDeclarations.forEach(typeDecl => {
-        code += this.generateClass(typeDecl);
+        if (typeDecl.type === 'ClassDeclaration') {
+          code += this.generateClass(typeDecl);
+        } else if (typeDecl.type === 'InterfaceDeclaration') {
+          code += this.generateInterface(typeDecl);
+        } else if (typeDecl.type === 'EnumDeclaration') {
+          code += this.generateEnum(typeDecl);
+        } else {
+          code += `// Unknown type declaration: ${typeDecl.type}\n`;
+        }
       });
     }
     
     return code;
+  }
+
+  // Generate package declaration
+  generatePackage(pkg) {
+    return `package ${pkg.packageName};`;
   }
 
   // Generate import statement
@@ -819,6 +851,10 @@ class JavaGenerator {
       cls.body.statements.forEach(stmt => {
         if (stmt && stmt.type === 'MethodDeclaration') {
           code += this.generateMethod(stmt);
+        } else if (stmt && stmt.type === 'ConstructorDeclaration') {
+          code += this.generateConstructor(stmt);
+        } else if (stmt && stmt.type === 'FieldDeclaration') {
+          code += this.generateField(stmt);
         }
       });
       this.indentLevel--;
@@ -829,9 +865,293 @@ class JavaGenerator {
     return code;
   }
 
+  // Generate interface declaration
+  generateInterface(iface) {
+    let code = '';
+    
+    // Interface signature
+    code += this.indent();
+    
+    // Modifiers
+    if (iface.modifiers && iface.modifiers.length > 0) {
+      iface.modifiers.forEach(mod => {
+        code += mod.name + ' ';
+      });
+    }
+    
+    code += 'interface ' + iface.name;
+    
+    // Generic type parameters
+    if (iface.typeParameters && iface.typeParameters.length > 0) {
+      code += '<' + iface.typeParameters.join(', ') + '>';
+    }
+    
+    // Extends clause
+    if (iface.interfaces && iface.interfaces.length > 0) {
+      code += ' extends ';
+      code += iface.interfaces.map(i => i.name).join(', ');
+    }
+    
+    code += ' {\n';
+    
+    // Interface body (methods and fields)
+    if (iface.body && iface.body.statements) {
+      this.indentLevel++;
+      iface.body.statements.forEach(stmt => {
+        if (stmt && stmt.type === 'MethodDeclaration') {
+          code += this.generateInterfaceMethod(stmt);
+        } else if (stmt && stmt.type === 'FieldDeclaration') {
+          code += this.generateField(stmt);
+        }
+      });
+      this.indentLevel--;
+    }
+    
+    code += '}\n';
+    
+    return code;
+  }
+
+  // Generate enum declaration
+  generateEnum(enumDecl) {
+    let code = '';
+    
+    // Enum signature
+    code += this.indent();
+    
+    // Modifiers
+    if (enumDecl.modifiers && enumDecl.modifiers.length > 0) {
+      enumDecl.modifiers.forEach(mod => {
+        code += mod.name + ' ';
+      });
+    }
+    
+    code += 'enum ' + enumDecl.name;
+    
+    // Implements clause
+    if (enumDecl.interfaces && enumDecl.interfaces.length > 0) {
+      code += ' implements ';
+      code += enumDecl.interfaces.map(i => i.name).join(', ');
+    }
+    
+    code += ' {\n';
+    
+    // Enum constants
+    if (enumDecl.constants && enumDecl.constants.length > 0) {
+      this.indentLevel++;
+      enumDecl.constants.forEach((constant, index) => {
+        code += this.indent() + constant.name;
+        
+        // Add constructor parameters if present
+        if (constant.parameters && constant.parameters.length > 0) {
+          code += '(';
+          const paramValues = constant.parameters.map(token => {
+            if (token.type === 'STRING_LITERAL' || token.type === 'STRING') {
+              return `"${token.value}"`;
+            }
+            return token.value;
+          }).join('');
+          code += paramValues + ')';
+        }
+        
+        if (index < enumDecl.constants.length - 1) {
+          code += ',';
+        }
+        code += '\n';
+      });
+      this.indentLevel--;
+      
+      // Add semicolon if there are methods/fields
+      if (enumDecl.body && enumDecl.body.statements && enumDecl.body.statements.length > 0) {
+        code += ';\n';
+      }
+    }
+    
+    // Enum body (methods and fields)
+    if (enumDecl.body && enumDecl.body.statements) {
+      this.indentLevel++;
+      enumDecl.body.statements.forEach(stmt => {
+        if (stmt && stmt.type === 'MethodDeclaration') {
+          code += this.generateMethod(stmt);
+        } else if (stmt && stmt.type === 'FieldDeclaration') {
+          code += this.generateField(stmt);
+        }
+      });
+      this.indentLevel--;
+    }
+    
+    code += '}\n';
+    
+    return code;
+  }
+
+  // Generate annotation
+  generateAnnotation(annotation) {
+    let code = '@' + annotation.name;
+    if (annotation.args && annotation.args.length > 0) {
+      code += '(' + annotation.args.join(', ') + ')';
+    }
+    return code;
+  }
+
+  // Generate field declaration
+  generateField(field) {
+    let code = '';
+    
+    // Annotations
+    if (field.annotations && field.annotations.length > 0) {
+      field.annotations.forEach(annotation => {
+        code += this.indent() + this.generateAnnotation(annotation) + '\n';
+      });
+    }
+    
+    // Field signature
+    code += this.indent();
+    
+    // Modifiers
+    if (field.modifiers && field.modifiers.length > 0) {
+      field.modifiers.forEach(mod => {
+        code += mod.name + ' ';
+      });
+    }
+    
+    // Field type
+    if (field.fieldType) {
+      code += field.fieldType.name;
+      if (field.fieldType.isArray) {
+        code += '[]'.repeat(field.fieldType.arrayDimensions);
+      }
+    }
+    
+    code += ' ' + field.name;
+    
+    // Initializer
+    if (field.initializer) {
+      code += ' = ';
+      code += this.generateExpression(field.initializer);
+    }
+    
+    code += ';\n';
+    
+    return code;
+  }
+
+  // Generate constructor declaration
+  generateConstructor(constructor) {
+    let code = '';
+    
+    // Annotations
+    if (constructor.annotations && constructor.annotations.length > 0) {
+      constructor.annotations.forEach(annotation => {
+        code += this.indent() + this.generateAnnotation(annotation) + '\n';
+      });
+    }
+    
+    // Constructor signature
+    code += this.indent();
+    
+    // Modifiers
+    if (constructor.modifiers && constructor.modifiers.length > 0) {
+      constructor.modifiers.forEach(mod => {
+        code += mod.name + ' ';
+      });
+    }
+    
+    // Constructor name (same as class name)
+    code += constructor.name + '(';
+    
+    // Parameters
+    if (constructor.parameters && constructor.parameters.length > 0) {
+      const params = constructor.parameters.map(param => {
+        let paramStr = param.type.name;
+        if (param.type.isArray) {
+          paramStr += '[]'.repeat(param.type.arrayDimensions || 1);
+        }
+        paramStr += ' ' + param.name;
+        return paramStr;
+      });
+      code += params.join(', ');
+    }
+    
+    code += ') {\n';
+    
+    // Constructor body
+    if (constructor.body && constructor.body.statements) {
+      this.indentLevel++;
+      constructor.body.statements.forEach(stmt => {
+        code += this.generateStatement(stmt);
+      });
+      this.indentLevel--;
+    }
+    
+    code += this.indent() + '}\n\n';
+    
+    return code;
+  }
+
+  // Generate interface method declaration (no body)
+  generateInterfaceMethod(method) {
+    let code = '';
+    
+    // Annotations
+    if (method.annotations && method.annotations.length > 0) {
+      method.annotations.forEach(annotation => {
+        code += this.indent() + this.generateAnnotation(annotation) + '\n';
+      });
+    }
+    
+    // Method signature
+    code += this.indent();
+    
+    // Modifiers (but skip abstract for interface methods)
+    if (method.modifiers && method.modifiers.length > 0) {
+      method.modifiers.forEach(mod => {
+        if (mod.name !== 'abstract') {
+          code += mod.name + ' ';
+        }
+      });
+    }
+    
+    // Return type
+    if (method.returnType) {
+      code += method.returnType.name;
+      if (method.returnType.isArray) {
+        code += '[]'.repeat(method.returnType.arrayDimensions || 1);
+      }
+      code += ' ';
+    }
+    
+    // Method name
+    code += method.name + '(';
+    
+    // Parameters
+    if (method.parameters && method.parameters.length > 0) {
+      const params = method.parameters.map(param => {
+        let paramStr = param.type.name;
+        if (param.type.isArray) {
+          paramStr += '[]'.repeat(param.type.arrayDimensions || 1);
+        }
+        paramStr += ' ' + param.name;
+        return paramStr;
+      });
+      code += params.join(', ');
+    }
+    
+    code += ');\n\n';
+    
+    return code;
+  }
+
   // Generate method declaration
   generateMethod(method) {
     let code = '';
+    
+    // Annotations
+    if (method.annotations && method.annotations.length > 0) {
+      method.annotations.forEach(annotation => {
+        code += this.indent() + this.generateAnnotation(annotation) + '\n';
+      });
+    }
     
     // Method signature
     code += this.indent();
@@ -895,6 +1215,14 @@ class JavaGenerator {
         return this.generateExpressionStatement(stmt);
       case 'ReturnStatement':
         return this.generateReturnStatement(stmt);
+      case 'ForStatement':
+        return this.generateForStatement(stmt);
+      case 'WhileStatement':
+        return this.generateWhileStatement(stmt);
+      case 'IfStatement':
+        return this.generateIfStatement(stmt);
+      case 'TryStatement':
+        return this.generateTryStatement(stmt);
       default:
         return this.indent() + '// Unknown statement type: ' + stmt.type + '\n';
     }
@@ -939,12 +1267,340 @@ class JavaGenerator {
     return code;
   }
 
+  // Generate for statement
+  generateForStatement(stmt) {
+    let code = this.indent() + 'for (';
+    
+    // Handle the for loop components from tokens if available
+    if (stmt.tokens && stmt.tokens.length > 0) {
+      // Extract the content between parentheses
+      let inParens = false;
+      let parenContent = [];
+      
+      for (let token of stmt.tokens) {
+        if (token.type === 'LPAREN') {
+          inParens = true;
+          continue;
+        }
+        if (token.type === 'RPAREN') {
+          inParens = false;
+          break;
+        }
+        if (inParens) {
+          parenContent.push(token);
+        }
+      }
+      
+      // Generate proper for loop syntax
+      if (parenContent.length > 0) {
+        let forContent = '';
+        let semicolonCount = 0;
+        
+        for (let i = 0; i < parenContent.length; i++) {
+          let token = parenContent[i];
+          
+          if (token.type === 'SEMICOLON') {
+            semicolonCount++;
+            forContent += '; ';
+          } else if (token.type === 'INT') {
+            forContent += 'int ';
+          } else if (token.type === 'IDENTIFIER') {
+            forContent += token.value;
+          } else if (token.type === 'ASSIGN') {
+            forContent += ' = ';
+          } else if (token.type === 'NUMBER') {
+            forContent += token.value;
+          } else if (token.type === 'LT' || token.type === 'LESS_THAN') {
+            forContent += ' < ';
+          } else if (token.type === 'INCREMENT') {
+            forContent += token.value;
+          } else {
+            forContent += token.value;
+          }
+        }
+        
+        code += forContent;
+      }
+    } else {
+      // Fallback for basic for loop structure
+      code += 'int i = 0; i < 10; i++';
+    }
+    
+    code += ') ';
+    
+    // Generate the body
+    if (stmt.body) {
+      if (stmt.body.type === 'Block') {
+        code += '{\n';
+        this.indentLevel++;
+        if (stmt.body.statements) {
+          stmt.body.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        }
+        this.indentLevel--;
+        code += this.indent() + '}\n';
+      } else if (stmt.body.type === 'ExpressionStatement' && stmt.body.expression && stmt.body.expression.tokens) {
+        // Handle expression statement body that contains block tokens
+        const tokens = stmt.body.expression.tokens;
+        let hasOpenBrace = tokens.some(t => t.type === 'LBRACE');
+        
+        if (hasOpenBrace) {
+          code += '{\n';
+          this.indentLevel++;
+          
+          // Extract the actual statement content (skip the opening brace)
+          let statementTokens = tokens.filter(t => t.type !== 'LBRACE');
+          if (statementTokens.length > 0) {
+            code += this.indent();
+            statementTokens.forEach(token => {
+              if (token.type === 'STRING') {
+                code += `"${token.value}"`;
+              } else {
+                code += token.value;
+              }
+            });
+            code += ';\n';
+          }
+          
+          this.indentLevel--;
+          code += this.indent() + '}\n';
+        } else {
+          // Single statement body
+          this.indentLevel++;
+          code += '\n' + this.generateStatement(stmt.body);
+          this.indentLevel--;
+        }
+      } else {
+        // Single statement body
+        this.indentLevel++;
+        code += '\n' + this.generateStatement(stmt.body);
+        this.indentLevel--;
+      }
+    } else {
+      code += '{\n' + this.indent() + '    // TODO: Add for loop body\n' + this.indent() + '}\n';
+    }
+    
+    return code;
+  }
+
+  // Generate while statement
+  generateWhileStatement(stmt) {
+    let code = this.indent() + 'while (';
+    
+    // Generate condition
+    if (stmt.condition && stmt.condition.tokens) {
+      code += stmt.condition.tokens.map(token => {
+        if (token.type === 'IDENTIFIER') {
+          return token.value;
+        } else if (token.type === 'LESS_THAN' || token.type === 'LT') {
+          return ' < ';
+        } else if (token.type === 'GREATER_THAN' || token.type === 'GT') {
+          return ' > ';
+        } else if (token.type === 'EQUAL' || token.type === 'EQUALS') {
+          return ' == ';
+        } else if (token.type === 'NOT_EQUAL') {
+          return ' != ';
+        } else if (token.type === 'LESS_EQUAL') {
+          return ' <= ';
+        } else if (token.type === 'GREATER_EQUAL') {
+          return ' >= ';
+        } else if (token.type === 'NUMBER') {
+          return token.value;
+        } else {
+          return token.value;
+        }
+      }).join('');
+    }
+    
+    code += ') ';
+    
+    // Generate body
+    if (stmt.body) {
+      if (stmt.body.type === 'Block') {
+        code += '{\n';
+        this.indentLevel++;
+        if (stmt.body.statements) {
+          stmt.body.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        }
+        this.indentLevel--;
+        code += this.indent() + '}\n';
+      } else {
+        code += '{\n';
+        this.indentLevel++;
+        code += this.generateStatement(stmt.body);
+        this.indentLevel--;
+        code += this.indent() + '}\n';
+      }
+    }
+    
+    return code;
+  }
+
+  // Generate if statement
+  generateIfStatement(stmt) {
+    let code = this.indent() + 'if (';
+    
+    // Generate condition
+    if (stmt.condition && stmt.condition.tokens) {
+      code += stmt.condition.tokens.map(token => {
+        if (token.type === 'IDENTIFIER') {
+          return token.value;
+        } else if (token.type === 'LESS_THAN' || token.type === 'LT') {
+          return ' < ';
+        } else if (token.type === 'GREATER_THAN' || token.type === 'GT') {
+          return ' > ';
+        } else if (token.type === 'EQUAL' || token.type === 'EQUALS') {
+          return ' == ';
+        } else if (token.type === 'NOT_EQUAL') {
+          return ' != ';
+        } else if (token.type === 'LESS_EQUAL') {
+          return ' <= ';
+        } else if (token.type === 'GREATER_EQUAL') {
+          return ' >= ';
+        } else if (token.type === 'NUMBER') {
+          return token.value;
+        } else {
+          return token.value;
+        }
+      }).join('');
+    }
+    
+    code += ') ';
+    
+    // Generate then statement
+    if (stmt.thenStatement) {
+      if (stmt.thenStatement.type === 'Block') {
+        code += '{\n';
+        this.indentLevel++;
+        if (stmt.thenStatement.statements) {
+          stmt.thenStatement.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        }
+        this.indentLevel--;
+        code += this.indent() + '}';
+      } else {
+        code += '{\n';
+        this.indentLevel++;
+        code += this.generateStatement(stmt.thenStatement);
+        this.indentLevel--;
+        code += this.indent() + '}';
+      }
+    }
+    
+    // Generate else statement if present
+    if (stmt.elseStatement) {
+      code += ' else ';
+      if (stmt.elseStatement.type === 'Block') {
+        code += '{\n';
+        this.indentLevel++;
+        if (stmt.elseStatement.statements) {
+          stmt.elseStatement.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        }
+        this.indentLevel--;
+        code += this.indent() + '}';
+      } else {
+        code += '{\n';
+        this.indentLevel++;
+        code += this.generateStatement(stmt.elseStatement);
+        this.indentLevel--;
+        code += this.indent() + '}';
+      }
+    }
+    
+    code += '\n';
+    return code;
+  }
+
+  // Generate try statement
+  generateTryStatement(stmt) {
+    let code = this.indent() + 'try ';
+    
+    // Generate try block
+    if (stmt.tryBlock) {
+      code += '{\n';
+      this.indentLevel++;
+      if (stmt.tryBlock.statements) {
+        stmt.tryBlock.statements.forEach(bodyStmt => {
+          code += this.generateStatement(bodyStmt);
+        });
+      }
+      this.indentLevel--;
+      code += this.indent() + '}';
+    }
+    
+    // Generate catch blocks
+    if (stmt.catchBlocks && stmt.catchBlocks.length > 0) {
+      stmt.catchBlocks.forEach(catchBlock => {
+        code += ' catch (';
+        
+        // Generate catch parameter
+        if (catchBlock.parameter && catchBlock.parameter.tokens) {
+          code += catchBlock.parameter.tokens.map(token => token.value).join(' ');
+        } else {
+          code += 'Exception e';
+        }
+        
+        code += ') {\n';
+        this.indentLevel++;
+        
+        // Generate catch block body
+        if (catchBlock.body && catchBlock.body.statements) {
+          catchBlock.body.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        } else {
+          code += this.indent() + '// TODO: Handle exception\n';
+        }
+        
+        this.indentLevel--;
+        code += this.indent() + '}';
+      });
+    }
+    
+    // Generate finally block
+    if (stmt.finallyBlock) {
+      code += ' finally {\n';
+      this.indentLevel++;
+      if (stmt.finallyBlock.statements) {
+        stmt.finallyBlock.statements.forEach(bodyStmt => {
+          code += this.generateStatement(bodyStmt);
+        });
+      }
+      this.indentLevel--;
+      code += this.indent() + '}';
+    }
+    
+    code += '\n';
+    return code;
+  }
+
   // Generate expression
   generateExpression(expr) {
     if (!expr) return '';
     
     if (expr.tokens && expr.tokens.length > 0) {
-      return expr.tokens.map(token => token.value).join('');
+      return expr.tokens.map((token, index) => {
+        // Handle string literals properly
+        if (token.type === 'STRING_LITERAL' || token.type === 'STRING') {
+          return `"${token.value}"`;
+        }
+        
+        // Add spacing around operators
+        const needsSpaceBefore = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'LESS_THAN', 'GREATER_THAN', 'EQUALS', 'NOT_EQUALS'].includes(token.type);
+        const needsSpaceAfter = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'LESS_THAN', 'GREATER_THAN', 'EQUALS', 'NOT_EQUALS'].includes(token.type);
+        
+        let result = token.value;
+        if (needsSpaceBefore && index > 0) result = ' ' + result;
+        if (needsSpaceAfter && index < expr.tokens.length - 1) result = result + ' ';
+        
+        return result;
+      }).join('');
     }
     
     return '/* expression */';

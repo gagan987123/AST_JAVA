@@ -160,7 +160,8 @@ class JavaLexer {
     this.currentChar = this.text[this.pos];
     
     // Java keywords mapping
-    this.keywords = {
+    this.keywords = Object.create(null); // Create object without prototype
+    Object.assign(this.keywords, {
       // Access modifiers
       'public': JavaTokenType.PUBLIC,
       'private': JavaTokenType.PRIVATE,
@@ -223,7 +224,7 @@ class JavaLexer {
       'true': JavaTokenType.BOOLEAN,
       'false': JavaTokenType.BOOLEAN,
       'null': JavaTokenType.NULL
-    };
+    });
   }
 
   error(message) {

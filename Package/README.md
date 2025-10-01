@@ -1,6 +1,6 @@
-# Java AST Parser
+# Java AST Parser & Generator
 
-A lightweight, focused Java Abstract Syntax Tree (AST) parser built in JavaScript. Designed specifically for parsing Java methods, constructors, imports, and class structures.
+A lightweight, focused Java Abstract Syntax Tree (AST) parser and code generator built in JavaScript. Designed specifically for parsing Java methods, constructors, imports, and class structures, as well as generating Java code from AST.
 
 ## Features
 
@@ -10,6 +10,7 @@ A lightweight, focused Java Abstract Syntax Tree (AST) parser built in JavaScrip
 - ✅ **Parse Package Declarations** - Identifies package information
 - ✅ **Parse Class Structures** - Extracts class names, modifiers, and annotations
 - ✅ **Handle Annotations** - Supports `@Test`, `@Override`, and other annotations
+- ✅ **Generate Java Code** - Convert AST back to formatted Java source code
 - ✅ **Clean API** - Simple static method interface
 
 ## Installation
@@ -21,7 +22,7 @@ npm install java-ast-parser
 ## Quick Start
 
 ```javascript
-const { JavaParser } = require('java-ast-parser');
+const { JavaParser, JavaGenerator } = require('java-ast-parser');
 const fs = require('fs');
 
 // Read Java file
@@ -47,6 +48,11 @@ firstClass.body.statements.forEach((method, index) => {
         console.log(`${index + 1}. Method: ${method.returnType.name} ${method.name}(${params})`);
     }
 });
+
+// Generate Java code from AST
+const generatedCode = JavaGenerator.generate(ast);
+console.log('Generated Java Code:');
+console.log(generatedCode);
 ```
 
 ## API Reference
@@ -63,6 +69,16 @@ Parses Java source code and returns an Abstract Syntax Tree.
   - `packageDeclaration` - Package information
   - `imports` - Array of import declarations
   - `typeDeclarations` - Array of class/interface declarations
+
+### JavaGenerator.generate(ast)
+
+Generates Java source code from an Abstract Syntax Tree.
+
+**Parameters:**
+- `ast` (CompilationUnit) - The AST to convert to Java code
+
+**Returns:**
+- `string` - Formatted Java source code
 
 ### AST Structure
 
@@ -217,11 +233,17 @@ The parser returns:
 
 ## Use Cases
 
+### Parsing
 - **Code Analysis** - Analyze Java codebases for metrics and patterns
 - **Documentation Generation** - Extract method signatures for API docs
-- **Refactoring Tools** - Build tools that modify Java code structure
 - **Testing Tools** - Identify test methods and their structure
 - **IDE Extensions** - Power code navigation and analysis features
+
+### Code Generation
+- **Refactoring Tools** - Modify AST and regenerate Java code
+- **Code Templates** - Generate Java classes from templates
+- **Code Transformation** - Convert between different Java patterns
+- **Automated Code Generation** - Generate boilerplate code from specifications
 
 ## Requirements
 
