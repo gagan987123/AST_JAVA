@@ -374,6 +374,27 @@ class JavaParser {
     return annotations;
   }
 
+  // Parse a single annotation
+  annotation() {
+    const atToken = this.consume(JavaTokenType.AT);
+    const name = this.consume(JavaTokenType.IDENTIFIER, 'Expected annotation name').value;
+    const args = [];
+    
+    // Simple annotation parsing (not handling complex arguments)
+    if (this.match(JavaTokenType.LPAREN)) {
+      this.advance();
+      // Skip annotation arguments for simplicity
+      let parenCount = 1;
+      while (parenCount > 0 && !this.match(JavaTokenType.EOF)) {
+        if (this.match(JavaTokenType.LPAREN)) parenCount++;
+        if (this.match(JavaTokenType.RPAREN)) parenCount--;
+        this.advance();
+      }
+    }
+    
+    return new Annotation(name, args, atToken.line, atToken.column);
+  }
+
   // Parse modifiers (public, private, static, etc.)
   parseModifiers() {
     const modifiers = [];
@@ -599,17 +620,31 @@ class JavaParser {
       const typeToken = this.currentToken;
       const nextToken = this.peek();
       
-      if (nextToken.type === JavaTokenType.IDENTIFIER) {
-        const nameToken = this.peek(2);
-        if (nameToken && nameToken.type === JavaTokenType.LPAREN) {
-          // primitive type + identifier + ( = method
+      // Look ahead past array brackets to find the identifier
+      let lookahead = 1;
+      
+      // Skip array brackets if present (e.g., int[], char[][])
+      while (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.LBRACKET) {
+        lookahead++; // skip [
+        if (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.RBRACKET) {
+          lookahead++; // skip ]
+        }
+      }
+      
+      const identifierToken = this.peek(lookahead);
+      
+      if (identifierToken && identifierToken.type === JavaTokenType.IDENTIFIER) {
+        const afterIdentifier = this.peek(lookahead + 1);
+        
+        if (afterIdentifier && afterIdentifier.type === JavaTokenType.LPAREN) {
+          // primitive type (possibly with arrays) + identifier + ( = method
           return this.methodDeclaration(modifiers, annotations);
         } else {
-          // primitive type + identifier + something else = field
+          // primitive type (possibly with arrays) + identifier + something else = field
           return this.fieldDeclaration(modifiers, annotations);
         }
       } else {
-        // Just primitive type - assume method for now
+        // No identifier found - this is unusual, but assume method for safety
         return this.methodDeclaration(modifiers, annotations);
       }
     }
@@ -617,24 +652,53 @@ class JavaParser {
     if (this.match(JavaTokenType.IDENTIFIER)) {
       // Could be either a method with object return type or a constructor
       const name = this.currentToken.value;
-      const nextToken = this.peek();
+      
+      // Look ahead to find method name, handling generic types like List<String>
+      let lookahead = 1;
+      let foundMethodName = false;
+      
+      // Skip generic type parameters if present (e.g., List<String>)
+      if (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.LESS_THAN) {
+        lookahead++; // skip <
+        let genericDepth = 1;
+        
+        while (genericDepth > 0 && this.peek(lookahead)) {
+          const token = this.peek(lookahead);
+          if (token.type === JavaTokenType.LESS_THAN) {
+            genericDepth++;
+          } else if (token.type === JavaTokenType.GREATER_THAN) {
+            genericDepth--;
+          }
+          lookahead++;
+        }
+      }
+      
+      // Skip array brackets if present
+      while (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.LBRACKET) {
+        lookahead++; // skip [
+        if (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.RBRACKET) {
+          lookahead++; // skip ]
+        }
+      }
+      
+      // Now check what we have
+      const nextToken = this.peek(lookahead);
       
       if (nextToken && nextToken.type === JavaTokenType.LPAREN) {
-        // identifier followed by ( - this is a constructor
+        // identifier (possibly with generics/arrays) followed by ( - this is a constructor
         return this.constructorDeclaration(modifiers, annotations);
       } else if (nextToken && nextToken.type === JavaTokenType.IDENTIFIER) {
-        // Check if this is actually a method by looking ahead for (
-        const secondNext = this.peek(2);
-        if (secondNext && secondNext.type === JavaTokenType.LPAREN) {
-          // identifier followed by identifier followed by ( - this is a method with object return type
+        // Check if the identifier after return type is followed by (
+        const methodNameToken = nextToken;
+        const afterMethodName = this.peek(lookahead + 1);
+        
+        if (afterMethodName && afterMethodName.type === JavaTokenType.LPAREN) {
+          // This is a method: ReturnType methodName(
           return this.methodDeclaration(modifiers, annotations);
         } else {
           // This is likely a field declaration
           return this.fieldDeclaration(modifiers, annotations);
         }
-      } else if (nextToken && nextToken.type === JavaTokenType.LBRACKET) {
-        // identifier followed by [ - this is a method with array return type
-        return this.methodDeclaration(modifiers, annotations);
       } else {
         // Probably a field or something else - skip it
         this.skipToNextMember();
@@ -767,8 +831,14 @@ class JavaParser {
     return parameters;
   }
 
-  // parameter: ('final')? type IDENTIFIER
+  // parameter: annotation* ('final')? type IDENTIFIER
   parameter() {
+    // Parse annotations (e.g., @ProbeClassName, @ProbeMethodName)
+    const annotations = [];
+    while (this.match(JavaTokenType.AT)) {
+      annotations.push(this.annotation());
+    }
+    
     let isFinal = false;
     if (this.match(JavaTokenType.FINAL)) {
       isFinal = true;
@@ -781,7 +851,7 @@ class JavaParser {
     return new Parameter(nameToken.value, type, isFinal, nameToken.line, nameToken.column);
   }
 
-  // Parse type (including arrays)
+  // Parse type (including arrays and generics)
   parseType() {
     let typeName;
     const startToken = this.currentToken;
@@ -793,6 +863,30 @@ class JavaParser {
       this.advance();
     } else if (this.match(JavaTokenType.IDENTIFIER)) {
       typeName = this.qualifiedName();
+      
+      // Handle generic type parameters (e.g., List<String>, Map<String, Integer>)
+      if (this.match(JavaTokenType.LESS_THAN)) {
+        this.advance(); // consume <
+        let genericDepth = 1;
+        const genericTokens = ['<'];
+        
+        // Collect all tokens until we close the generic declaration
+        while (genericDepth > 0 && !this.match(JavaTokenType.EOF)) {
+          const token = this.currentToken;
+          genericTokens.push(token.value);
+          
+          if (token.type === JavaTokenType.LESS_THAN) {
+            genericDepth++;
+          } else if (token.type === JavaTokenType.GREATER_THAN) {
+            genericDepth--;
+          }
+          
+          this.advance();
+        }
+        
+        // Append the generic part to the type name
+        typeName += genericTokens.join('');
+      }
     } else {
       this.error('Expected type');
     }
@@ -818,29 +912,40 @@ class JavaParser {
     const lbrace = this.consume(JavaTokenType.LBRACE);
     const statements = [];
     let statementCount = 0;
-    const maxStatements = 100; // Safety limit
+    const maxStatements = 1000; // Further increased limit for very complex methods
     
     // Parse statements inside the block
     while (!this.match(JavaTokenType.RBRACE) && !this.match(JavaTokenType.EOF) && 
            statementCount < maxStatements) {
+      
       try {
         const stmt = this.statement();
         if (stmt) {
           statements.push(stmt);
         }
         statementCount++;
+        
       } catch (error) {
+        console.warn(`Statement parsing error at line ${this.currentToken.line}: ${error.message}`);
         // Skip to next statement boundary on error
         this.skipToStatementBoundary();
         statementCount++;
       }
     }
     
+    if (statementCount >= maxStatements) {
+      console.warn('Block parsing hit statement limit, some statements may be missing');
+    }
+    
+    if (this.match(JavaTokenType.EOF)) {
+      console.warn(`Unexpected EOF while parsing block started at line ${lbrace.line}, parsed ${statementCount} statements`);
+      return new Block(statements, lbrace.line, lbrace.column);
+    }
+    
     this.consume(JavaTokenType.RBRACE, 'Expected "}"');
     
     return new Block(statements, lbrace.line, lbrace.column);
   }
-
   // Parse individual statements
   statement() {
     // Safety check to prevent infinite loops
@@ -871,6 +976,11 @@ class JavaParser {
     // While statement
     if (this.match(JavaTokenType.WHILE)) {
       return this.whileStatement();
+    }
+    
+    // Do-while statement
+    if (this.match(JavaTokenType.DO)) {
+      return this.doWhileStatement();
     }
     
     // Try statement
@@ -914,10 +1024,27 @@ class JavaParser {
     const ifToken = this.consume(JavaTokenType.IF);
     this.consume(JavaTokenType.LPAREN, 'Expected "(" after if');
     
-    // Collect condition tokens
+    // Collect condition tokens with proper nesting handling
     const conditionTokens = [];
-    while (!this.match(JavaTokenType.RPAREN) && !this.match(JavaTokenType.EOF)) {
-      conditionTokens.push(this.currentToken);
+    let parenCount = 0;
+    
+    while (!this.match(JavaTokenType.EOF)) {
+      if (this.match(JavaTokenType.LPAREN)) {
+        parenCount++;
+      } else if (this.match(JavaTokenType.RPAREN)) {
+        if (parenCount === 0) {
+          break; // This is the closing paren for the if condition
+        }
+        parenCount--;
+      }
+      
+      conditionTokens.push({
+        type: this.currentToken.type,
+        value: this.currentToken.value,
+        line: this.currentToken.line,
+        column: this.currentToken.column,
+        position: this.currentToken.position || 0
+      });
       this.advance();
     }
     
@@ -1027,6 +1154,63 @@ class JavaParser {
     };
   }
 
+  // Parse do-while statement
+  doWhileStatement() {
+    const doToken = this.consume(JavaTokenType.DO);
+    
+    // Parse the body (can be a block or single statement)
+    let body;
+    if (this.match(JavaTokenType.LBRACE)) {
+      body = this.block();
+    } else {
+      body = this.statement();
+    }
+    
+    // Expect 'while' keyword
+    this.consume(JavaTokenType.WHILE, 'Expected "while" after do body');
+    this.consume(JavaTokenType.LPAREN, 'Expected "(" after while');
+    
+    // Collect condition tokens
+    const conditionTokens = [];
+    let parenCount = 0;
+    
+    while (!this.match(JavaTokenType.EOF)) {
+      if (this.match(JavaTokenType.LPAREN)) {
+        parenCount++;
+      } else if (this.match(JavaTokenType.RPAREN)) {
+        if (parenCount === 0) {
+          break; // This is the closing paren for the while condition
+        }
+        parenCount--;
+      }
+      
+      conditionTokens.push({
+        type: this.currentToken.type,
+        value: this.currentToken.value,
+        line: this.currentToken.line,
+        column: this.currentToken.column,
+        position: this.currentToken.position || 0
+      });
+      this.advance();
+    }
+    
+    this.consume(JavaTokenType.RPAREN, 'Expected ")" after while condition');
+    this.consume(JavaTokenType.SEMICOLON, 'Expected ";" after do-while statement');
+    
+    return {
+      type: 'DoWhileStatement',
+      body: body,
+      condition: {
+        type: 'Expression',
+        tokens: conditionTokens,
+        line: doToken.line,
+        column: doToken.column
+      },
+      line: doToken.line,
+      column: doToken.column
+    };
+  }
+
   // Parse try statement
   tryStatement() {
     const tryToken = this.consume(JavaTokenType.TRY);
@@ -1110,6 +1294,11 @@ class JavaParser {
     const startLine = this.currentToken.line;
     const startColumn = this.currentToken.column;
     
+    // First check if this is a variable declaration
+    if (this.isVariableDeclaration()) {
+      return this.variableDeclaration();
+    }
+    
     // Otherwise, parse as expression statement
     const expression = this.expression();
     
@@ -1135,31 +1324,83 @@ class JavaParser {
 
   // Check if current position is a variable declaration
   isVariableDeclaration() {
-    // Look for type followed by identifier
+    // Look for primitive type followed by identifier
     if (this.match(JavaTokenType.INT, JavaTokenType.DOUBLE, JavaTokenType.BOOLEAN_TYPE,
                   JavaTokenType.FLOAT, JavaTokenType.LONG, JavaTokenType.SHORT,
                   JavaTokenType.BYTE, JavaTokenType.CHAR_TYPE)) {
       return true;
     }
     
-    // Check for object type (identifier followed by identifier)
+    // Check for object type (identifier, possibly with generics, followed by identifier)
     if (this.match(JavaTokenType.IDENTIFIER)) {
-      const nextToken = this.peek();
+      let lookahead = 1;
+      
+      // Skip generic type parameters if present (e.g., List<String>, Map<K,V>)
+      if (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.LESS_THAN) {
+        lookahead++; // skip <
+        let genericDepth = 1;
+        
+        while (genericDepth > 0 && this.peek(lookahead)) {
+          const token = this.peek(lookahead);
+          if (token.type === JavaTokenType.LESS_THAN) {
+            genericDepth++;
+          } else if (token.type === JavaTokenType.GREATER_THAN) {
+            genericDepth--;
+          }
+          lookahead++;
+        }
+      }
+      
+      // Skip array brackets if present
+      while (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.LBRACKET) {
+        lookahead++; // skip [
+        if (this.peek(lookahead) && this.peek(lookahead).type === JavaTokenType.RBRACKET) {
+          lookahead++; // skip ]
+        }
+      }
+      
+      // Now check if we have an identifier (variable name)
+      const nextToken = this.peek(lookahead);
       return nextToken && nextToken.type === JavaTokenType.IDENTIFIER;
     }
     
     return false;
   }
 
-  // Parse variable declaration
+  // Parse variable declaration (handles multiple variables: Type var1, var2, var3;)
   variableDeclaration() {
     const type = this.parseType();
-    const name = this.consume(JavaTokenType.IDENTIFIER, 'Expected variable name').value;
-    let initializer = null;
+    const variables = [];
+    
+    // Parse first variable
+    const firstName = this.consume(JavaTokenType.IDENTIFIER, 'Expected variable name').value;
+    let firstInitializer = null;
     
     if (this.match(JavaTokenType.ASSIGN)) {
       this.advance();
-      initializer = this.expression();
+      firstInitializer = this.expression();
+    }
+    
+    variables.push({
+      name: firstName,
+      initializer: firstInitializer
+    });
+    
+    // Parse additional variables if comma-separated
+    while (this.match(JavaTokenType.COMMA)) {
+      this.advance(); // consume comma
+      const varName = this.consume(JavaTokenType.IDENTIFIER, 'Expected variable name').value;
+      let varInitializer = null;
+      
+      if (this.match(JavaTokenType.ASSIGN)) {
+        this.advance();
+        varInitializer = this.expression();
+      }
+      
+      variables.push({
+        name: varName,
+        initializer: varInitializer
+      });
     }
     
     if (this.match(JavaTokenType.SEMICOLON)) {
@@ -1169,8 +1410,7 @@ class JavaParser {
     return {
       type: 'VariableDeclaration',
       variableType: type,
-      name: name,
-      initializer: initializer,
+      variables: variables, // Array of variables instead of single name/initializer
       line: type.line,
       column: type.column
     };
@@ -1181,48 +1421,66 @@ class JavaParser {
     return this.variableDeclarationOrExpression();
   }
 
-  // Parse expression (simplified for safety)
+  // Parse expression (improved for complex expressions)
   expression() {
     const startLine = this.currentToken.line;
     const startColumn = this.currentToken.column;
     const tokens = [];
     let tokenCount = 0;
-    const maxTokens = 50; // Safety limit
+    const maxTokens = 5000; // Reduced limit to prevent runaway expressions
     let parenCount = 0;
+    let braceCount = 0;
+    let bracketCount = 0;
+    let angleCount = 0; // Track generic type parameters < >
     
     // Parse tokens until we hit a statement boundary
-    while (!this.match(JavaTokenType.SEMICOLON) && !this.match(JavaTokenType.EOF) && 
-           !this.match(JavaTokenType.RBRACE) && tokenCount < maxTokens) {
+    while (!this.match(JavaTokenType.EOF) && tokenCount < maxTokens) {
       
-      // Handle parentheses properly
-      if (this.match(JavaTokenType.LPAREN)) {
-        parenCount++;
-      } else if (this.match(JavaTokenType.RPAREN)) {
-        parenCount--;
-        // Include the closing paren in the expression
-        tokens.push({
-          type: this.currentToken.type,
-          value: this.currentToken.value,
-          line: this.currentToken.line,
-          column: this.currentToken.column
-        });
-        this.advance();
-        tokenCount++;
-        // If we've closed all parens, we're done with this expression
-        if (parenCount <= 0) {
-          break;
-        }
-        continue;
-      }
-      
+      // Include the current token first
       tokens.push({
         type: this.currentToken.type,
         value: this.currentToken.value,
         line: this.currentToken.line,
-        column: this.currentToken.column
+        column: this.currentToken.column,
+        position: this.currentToken.position || 0
       });
+      
+      // Track nested structures
+      if (this.match(JavaTokenType.LPAREN)) {
+        parenCount++;
+      } else if (this.match(JavaTokenType.RPAREN)) {
+        parenCount--;
+      } else if (this.match(JavaTokenType.LBRACE)) {
+        braceCount++;
+      } else if (this.match(JavaTokenType.RBRACE)) {
+        braceCount--;
+      } else if (this.match(JavaTokenType.LBRACKET)) {
+        bracketCount++;
+      } else if (this.match(JavaTokenType.RBRACKET)) {
+        bracketCount--;
+      } else if (this.match(JavaTokenType.LESS_THAN)) {
+        angleCount++;
+      } else if (this.match(JavaTokenType.GREATER_THAN)) {
+        angleCount--;
+      }
+      
       this.advance();
+      
+      // Stop at statement boundaries only if we're not inside nested structures
+      if (parenCount === 0 && braceCount === 0 && bracketCount === 0 && angleCount === 0) {
+        if (this.match(JavaTokenType.SEMICOLON) || 
+            this.match(JavaTokenType.RBRACE) ||
+            this.match(JavaTokenType.COMMA)) {
+          break;
+        }
+      }
       tokenCount++;
+      
+      // Safety check for runaway expressions
+      if (tokenCount >= maxTokens) {
+        console.warn('Expression parsing hit token limit, stopping');
+        break;
+      }
     }
     
     return {
@@ -1301,13 +1559,26 @@ class JavaParser {
 
   // Skip to next statement boundary for error recovery
   skipToStatementBoundary() {
-    while (!this.match(JavaTokenType.EOF) && 
-           !this.match(JavaTokenType.SEMICOLON) &&
-           !this.match(JavaTokenType.RBRACE)) {
-      this.advance();
-    }
+    let braceCount = 0;
+    let parenCount = 0;
     
-    if (this.match(JavaTokenType.SEMICOLON)) {
+    while (!this.match(JavaTokenType.EOF)) {
+      if (this.match(JavaTokenType.LBRACE)) {
+        braceCount++;
+      } else if (this.match(JavaTokenType.RBRACE)) {
+        braceCount--;
+        if (braceCount < 0) {
+          break; // Don't consume the closing brace of the containing block
+        }
+      } else if (this.match(JavaTokenType.LPAREN)) {
+        parenCount++;
+      } else if (this.match(JavaTokenType.RPAREN)) {
+        parenCount--;
+      } else if (this.match(JavaTokenType.SEMICOLON) && braceCount === 0 && parenCount === 0) {
+        this.advance(); // consume the semicolon
+        break;
+      }
+      
       this.advance();
     }
   }

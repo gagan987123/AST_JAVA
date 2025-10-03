@@ -1219,6 +1219,8 @@ class JavaGenerator {
         return this.generateForStatement(stmt);
       case 'WhileStatement':
         return this.generateWhileStatement(stmt);
+      case 'DoWhileStatement':
+        return this.generateDoWhileStatement(stmt);
       case 'IfStatement':
         return this.generateIfStatement(stmt);
       case 'TryStatement':
@@ -1239,10 +1241,23 @@ class JavaGenerator {
       }
     }
     
-    code += ' ' + stmt.name;
-    
-    if (stmt.initializer) {
-      code += ' = ' + this.generateExpression(stmt.initializer);
+    // Handle both old format (single variable) and new format (multiple variables)
+    if (stmt.variables) {
+      // New format: multiple variables
+      const variableStrings = stmt.variables.map(variable => {
+        let varCode = variable.name;
+        if (variable.initializer) {
+          varCode += ' = ' + this.generateExpression(variable.initializer);
+        }
+        return varCode;
+      });
+      code += ' ' + variableStrings.join(', ');
+    } else {
+      // Old format: single variable (for backward compatibility)
+      code += ' ' + stmt.name;
+      if (stmt.initializer) {
+        code += ' = ' + this.generateExpression(stmt.initializer);
+      }
     }
     
     code += ';\n';
@@ -1439,6 +1454,63 @@ class JavaGenerator {
     return code;
   }
 
+  // Generate do-while statement
+  generateDoWhileStatement(stmt) {
+    let code = this.indent() + 'do ';
+    
+    // Generate body
+    if (stmt.body) {
+      if (stmt.body.type === 'Block') {
+        code += '{\n';
+        this.indentLevel++;
+        if (stmt.body.statements) {
+          stmt.body.statements.forEach(bodyStmt => {
+            code += this.generateStatement(bodyStmt);
+          });
+        }
+        this.indentLevel--;
+        code += this.indent() + '}';
+      } else {
+        code += '{\n';
+        this.indentLevel++;
+        code += this.generateStatement(stmt.body);
+        this.indentLevel--;
+        code += this.indent() + '}';
+      }
+    }
+    
+    code += ' while (';
+    
+    // Generate condition
+    if (stmt.condition && stmt.condition.tokens) {
+      code += stmt.condition.tokens.map(token => {
+        if (token.type === 'IDENTIFIER') {
+          return token.value;
+        } else if (token.type === 'LESS_THAN' || token.type === 'LT') {
+          return ' < ';
+        } else if (token.type === 'GREATER_THAN' || token.type === 'GT') {
+          return ' > ';
+        } else if (token.type === 'EQUAL' || token.type === 'EQUALS') {
+          return ' == ';
+        } else if (token.type === 'NOT_EQUAL') {
+          return ' != ';
+        } else if (token.type === 'LESS_EQUAL') {
+          return ' <= ';
+        } else if (token.type === 'GREATER_EQUAL') {
+          return ' >= ';
+        } else if (token.type === 'NUMBER') {
+          return token.value;
+        } else {
+          return token.value;
+        }
+      }).join('');
+    }
+    
+    code += ');\n';
+    
+    return code;
+  }
+
   // Generate if statement
   generateIfStatement(stmt) {
     let code = this.indent() + 'if (';
@@ -1591,9 +1663,19 @@ class JavaGenerator {
           return `"${token.value}"`;
         }
         
-        // Add spacing around operators
-        const needsSpaceBefore = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'LESS_THAN', 'GREATER_THAN', 'EQUALS', 'NOT_EQUALS'].includes(token.type);
-        const needsSpaceAfter = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'LESS_THAN', 'GREATER_THAN', 'EQUALS', 'NOT_EQUALS'].includes(token.type);
+        // Handle character literals properly
+        if (token.type === 'CHAR') {
+          return `'${token.value}'`;
+        }
+        
+        // Add spacing around operators (but not for generic type parameters)
+        const isGenericContext = (index > 0 && expr.tokens[index - 1] && expr.tokens[index - 1].type === 'IDENTIFIER') || 
+                                (index < expr.tokens.length - 1 && expr.tokens[index + 1] && expr.tokens[index + 1].type === 'IDENTIFIER');
+        
+        const needsSpaceBefore = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'EQUALS', 'NOT_EQUALS'].includes(token.type) ||
+                                (['LESS_THAN', 'GREATER_THAN'].includes(token.type) && !isGenericContext);
+        const needsSpaceAfter = ['ASSIGN', 'PLUS', 'MINUS', 'MULTIPLY', 'DIVIDE', 'EQUALS', 'NOT_EQUALS', 'NEW', 'TRY', 'CATCH', 'FINALLY', 'IF', 'ELSE', 'FOR', 'WHILE', 'INT', 'DOUBLE', 'BOOLEAN_TYPE', 'FLOAT', 'LONG', 'SHORT', 'BYTE', 'CHAR_TYPE', 'VOID'].includes(token.type) ||
+                               (['LESS_THAN', 'GREATER_THAN'].includes(token.type) && !isGenericContext);
         
         let result = token.value;
         if (needsSpaceBefore && index > 0) result = ' ' + result;
